@@ -13,6 +13,8 @@
 	<string name="control_power_on">Power ON</string>
 	<string name="control_power_off">Power OFF</string>
 	<string name="title_activity_login">Sign in</string>
+	<string name="main_current_location">Your current location is:</string>
+	<string name="action_logout">LogOut</string>
 
 	<!-- Strings related to login -->
 	<string name="prompt_email">Email</string>
@@ -26,6 +28,13 @@
 	<string name="permission_rationale">"Contacts permissions are needed for providing email
 		completions."
 	</string>
-	<string name="main_current_location">Your current location is:</string>
-	<string name="action_logout">LogOut</string>
+
+	<!-- Strings related to settings -->
+	<string name="settings_clear">Clear Settings</string>
+	<string name="settings_presence_threshold">Change the presence threshold:</string>
+	<string name="settings_login">Log In</string>
+	<string name="settings_status">Status:</string>
+	<string name="settings_save">Save Settings</string>
+	<string name="action_refresh">Refresh</string>
+
 </resources>

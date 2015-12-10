@@ -22,14 +22,16 @@ import android.content.SharedPreferences;
  */
 public class Settings {
 
-	private static final String SHARED_PREFS = "prefs";
-	private static final String PROPERTY_LOGIN_STATE = "loginState";
+	private static final String SHARED_PREFS = "settings";
+
+	private static final String PRESENCE_THRESHOLD_KEY = "presenceThresholdKey";
 
 	private static Settings ourInstance;
 
 	private final Context _context;
+	private final SharedPreferences _sharedPreferences;
 
-	private boolean _loginState = false;
+	private int _presenceThreshold;
 
 	public static Settings getInstance(Context context) {
 
@@ -43,27 +45,32 @@ public class Settings {
 	private Settings(Context context) {
 		this._context = context;
 
-		loadLoginState();
+		_sharedPreferences = _context.getSharedPreferences(SHARED_PREFS, Context.MODE_PRIVATE);
+		readPersistentSettings();
 	}
 
-	private void saveLoginState() {
-		final SharedPreferences.Editor editor = _context.getSharedPreferences(SHARED_PREFS, Context.MODE_PRIVATE).edit();
-		editor.putBoolean(PROPERTY_LOGIN_STATE, _loginState);
+	public int getPresenceThreshold() {
+		return _presenceThreshold;
+	}
+
+	public void setPresenceThreshold(int threshold) {
+		_presenceThreshold = threshold;
+	}
+
+	public void readPersistentSettings() {
+		_presenceThreshold = _sharedPreferences.getInt(PRESENCE_THRESHOLD_KEY, Config.PRESENCE_THRESHOLD);
+	}
+
+	public void writePeristentSettings() {
+		final SharedPreferences.Editor editor = _sharedPreferences.edit();
+		editor.putFloat(PRESENCE_THRESHOLD_KEY, _presenceThreshold);
 		editor.commit();
 	}
 
-	private void loadLoginState() {
-//		_loginState = false;
-		_loginState = _context.getSharedPreferences(SHARED_PREFS, Context.MODE_PRIVATE).getBoolean(PROPERTY_LOGIN_STATE, false);
-	}
-
-	public boolean isLoggedIn() {
-		return _loginState;
-	}
-
-	public void setLoginState(boolean newLoginState) {
-		this._loginState = newLoginState;
-		saveLoginState();
+	public void clearSettings() {
+		final SharedPreferences.Editor editor = _sharedPreferences.edit();
+		editor.clear().commit();
+		_presenceThreshold = Config.PRESENCE_THRESHOLD;
 	}
 
 }

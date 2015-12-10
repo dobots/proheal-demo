@@ -9,6 +9,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
 import android.util.Log;
 import android.view.Menu;
@@ -29,6 +30,7 @@ import com.strongloop.android.loopback.callbacks.ObjectCallback;
 import com.strongloop.android.loopback.callbacks.VoidCallback;
 
 import org.almende.proheal.cfg.Config;
+import org.almende.proheal.cfg.Settings;
 import org.almende.proheal.loopback.Beacon;
 import org.almende.proheal.loopback.BeaconRepository;
 import org.almende.proheal.loopback.Location;
@@ -112,6 +114,34 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	private Location _selectedLocation;
 
 	private Watchdog _watchdog;
+	private boolean _connectionError;
+	private boolean _stopped;
+
+	private Handler _uiHandler = new Handler();
+	private Runnable _uiUpdate = new Runnable() {
+		@Override
+		public void run() {
+			if (!_switching && !_connectionError && _selectedBeacon != null) {
+				_beaconRepository.findById(_selectedBeacon.getId(), new ObjectCallback<Beacon>() {
+					@Override
+					public void onSuccess(Beacon object) {
+						_selectedBeacon = object;
+						updateLightBulb(_selectedBeacon.getSwitchState());
+						_uiHandler.postDelayed(_uiUpdate, Config.GUI_UPDATE_INTERVAL);
+					}
+
+					@Override
+					public void onError(Throwable t) {
+						_uiHandler.postDelayed(_uiUpdate, Config.GUI_UPDATE_INTERVAL);
+					}
+				});
+			} else {
+				_uiHandler.postDelayed(_uiUpdate, Config.GUI_UPDATE_INTERVAL);
+			}
+		}
+	};
+
+	private boolean _switching = false;
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
@@ -121,20 +151,22 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 		_restAdapter = new RestAdapter(getApplicationContext(), Config.REST_API_URL);
 
-		_ble = new BleExt();
-		_ble.init(this, new IStatusCallback() {
-			@Override
-			public void onSuccess() {
+		_watchdog = new Watchdog(_restAdapter);
 
-			}
+		_uiHandler.postDelayed(_uiUpdate, Config.GUI_UPDATE_INTERVAL);
 
-			@Override
-			public void onError(int error) {
-
-			}
-		});
-
-		_watchdog = new Watchdog(this, _restAdapter);
+//		_ble = new BleExt();
+//		_ble.init(this, new IStatusCallback() {
+//			@Override
+//			public void onSuccess() {
+//
+//			}
+//
+//			@Override
+//			public void onError(int error) {
+//
+//			}
+//		});
 
 		// create and bind to the BleScanService
 		Intent intent = new Intent(this, BleScanService.class);
@@ -146,58 +178,17 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		super.onResume();
 
 		_userRepository = _restAdapter.createRepository(UserRepository.class);
+		_beaconRepository = _restAdapter.createRepository(BeaconRepository.class);
+		_locationRepository = _restAdapter.createRepository(LocationRepository.class);
 
-		if (
-//				!Settings.getInstance(getApplicationContext()).isLoggedIn() ||
-				!_userRepository.isLoggedIn()) {
+		if (!_userRepository.isLoggedIn()) {
 			startActivity(new Intent(this, LoginActivity.class));
 			return;
 		}
 
-		_beaconRepository = _restAdapter.createRepository(BeaconRepository.class);
-		_beaconRepository.findAll(new ListCallback<Beacon>() {
-			@Override
-			public void onSuccess(List<Beacon> objects) {
-				_trackedBeacons = objects;
-				Log.i(TAG, "success: " + objects);
-			}
+		refresh();
 
-			@Override
-			public void onError(Throwable t) {
-				Log.i(TAG, "error: ", t);
-			}
-		});
-
-		_locationRepository = _restAdapter.createRepository(LocationRepository.class);
-		_locationRepository.findAll(new ListCallback<Location>() {
-			@Override
-			public void onSuccess(List<Location> objects) {
-				_locations = objects;
-				final String[] locationNames = new String[_locations.size() + 1];
-				locationNames[0] = "None";
-				for (int i = 0; i < _locations.size(); ++i) {
-					locationNames[i + 1] = _locations.get(i).getDescription();
-				}
-				_spRoom.post(new Runnable() {
-					@Override
-					public void run() {
-						_spRoom.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_spinner_dropdown_item, locationNames));
-						_spRoom.setOnItemSelectedListener(MainActivity.this);
-					}
-				});
-			}
-
-			@Override
-			public void onError(Throwable t) {
-				Log.i(TAG, "error: ", t);
-			}
-		});
-
-		startScan(BleDeviceFilter.crownstone);
-
-		if (_watchdog != null) {
-			_watchdog.start();
-		}
+		onStartWatch();
 	}
 
 	@Override
@@ -206,6 +197,16 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 //		_watchdog.stop();
 
 		super.onPause();
+	}
+
+	@Override
+	protected void onDestroy() {
+		super.onDestroy();
+
+		_watchdog.stop();
+		unbindService(_connection);
+		_bound = false;
+		_uiHandler.removeCallbacksAndMessages(null);
 	}
 
 	// if the service was connected successfully, the service connection gives us access to the service
@@ -232,12 +233,13 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			// set the scan pause (how many ms should the service wait before starting the next scan)
 			_service.setScanPause(Config.LOW_SCAN_PAUSE);
 
-//			_ble = _service.getBleExt();
+			_ble = _service.getBleExt();
 
 			_bound = true;
 
-			_watchdog.start();
-			startScan(BleDeviceFilter.crownstone);
+			_watchdog.setService(_service);
+
+			onStartWatch();
 		}
 
 		@Override
@@ -247,11 +249,89 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		}
 	};
 
+	private void onStartWatch() {
+		if (!_stopped) {
+			_watchdog.start();
+			startScan(BleDeviceFilter.crownstone);
+		}
+	}
+
+	private void onStopWatch() {
+		_watchdog.stop();
+		stopScan();
+	}
+
+	private void onConnectionError() {
+
+		if (!_connectionError) {
+			_connectionError = true;
+			AlertDialog.Builder builder = new AlertDialog.Builder(this);
+			builder.setTitle("Connection Error")
+					.setMessage("Please check your internet connection and refresh")
+					.setIcon(android.R.drawable.ic_dialog_alert)
+					.setNeutralButton("Dismiss", new DialogInterface.OnClickListener() {
+						@Override
+						public void onClick(DialogInterface dialog, int which) {
+							_connectionError = false;
+						}
+					});
+			// Create the AlertDialog object and return it
+			builder.create().show();
+			// stop watching, since we don't have connection anyway.
+			_stopped = true;
+			onStopWatch();
+		}
+	}
+
+	private void refresh() {
+		// clear stopped flag, and try connecting again
+		_stopped = false;
+
+		_beaconRepository.findAll(new ListCallback<Beacon>() {
+			@Override
+			public void onSuccess(List<Beacon> objects) {
+				_trackedBeacons = objects;
+				Log.i(TAG, "success: " + objects);
+			}
+
+			@Override
+			public void onError(Throwable t) {
+				Log.i(TAG, "error: ", t);
+				onConnectionError();
+			}
+		});
+
+		_locationRepository.findAll(new ListCallback<Location>() {
+			@Override
+			public void onSuccess(List<Location> objects) {
+				_locations = objects;
+				final String[] locationNames = new String[_locations.size() + 1];
+				locationNames[0] = "None";
+				for (int i = 0; i < _locations.size(); ++i) {
+					locationNames[i + 1] = _locations.get(i).getDescription();
+				}
+				_spRoom.post(new Runnable() {
+					@Override
+					public void run() {
+						_spRoom.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_spinner_dropdown_item, locationNames));
+						_spRoom.setOnItemSelectedListener(MainActivity.this);
+					}
+				});
+			}
+
+			@Override
+			public void onError(Throwable t) {
+				Log.i(TAG, "error: ", t);
+				onConnectionError();
+			}
+		});
+	}
+
 	// is scanning returns true if the service is "running", not if it is currently in a
 	// scan interval or a scan pause
 	private boolean isScanning() {
 		if (_bound) {
-			return _service.isScanning();
+			return _ble.isScanning();
 		}
 		return false;
 	}
@@ -333,7 +413,12 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 	private void stopScan() {
 		if (_bound) {
-			_btnScan.setText(getString(R.string.main_scan));
+			runOnUiThread(new Runnable() {
+				@Override
+				public void run() {
+					_btnScan.setText(getString(R.string.main_scan));
+				}
+			});
 			// stop scanning for devices
 			_service.stopIntervalScan();
 		}
@@ -341,7 +426,12 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 	private void startScan(BleDeviceFilter filter) {
 		if (_bound) {
-			_btnScan.setText(getString(R.string.main_stop_scan));
+			runOnUiThread(new Runnable() {
+				@Override
+				public void run() {
+					_btnScan.setText(getString(R.string.main_stop_scan));
+				}
+			});
 			// start scanning for devices, only return devices defined by the filter
 			_service.startIntervalScan(filter);
 		}
@@ -361,7 +451,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		// update the device list. since we are not keeping up a list of devices ourselves, we
 		// get the list of devices from the service
 
-		BleDeviceList tmp = _service.getDeviceMap().getRssiSortedList();
+		BleDeviceList tmp = _ble.getDeviceMap().getRssiSortedList();
 
 		// filter devices based on tracked beacons
 		_bleDeviceList.clear();
@@ -424,7 +514,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 			@Override
 			public void onError(Throwable t) {
-
+				onConnectionError();
 			}
 		});
 	}
@@ -479,6 +569,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			@Override
 			public void onError(Throwable t) {
 				Log.e(TAG, "error: ", t);
+				onConnectionError();
 			}
 		});
 	}
@@ -491,12 +582,13 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 				beacon.save(new VoidCallback() {
 					@Override
 					public void onSuccess() {
-						Log.i(TAG, "success");
+						Log.i(TAG, "switch state updated successfully");
 					}
 
 					@Override
 					public void onError(Throwable t) {
 						Log.i(TAG, "error: ", t);
+						onConnectionError();
 					}
 				});
 			}
@@ -511,6 +603,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			_selectedLocation = _locations.get(position - 1);
 			updateSelectedLocation(_selectedLocation);
 		} else {
+			_selectedLocation = null;
+			_selectedBeacon = null;
 			hideSwitch();
 		}
 	}
@@ -554,7 +648,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	private void powerOff() {
 		if (checkPermission()) {
 			updateSwitchState(_selectedBeacon, false);
-			updateLightBulb(false);
+//			updateLightBulb(false);
 
 			pause();
 			_progressDlg = ProgressDialog.show(this, "Switching power", "Please wait...");
@@ -585,7 +679,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	private void powerOn() {
 		if (checkPermission()) {
 			updateSwitchState(_selectedBeacon, true);
-			updateLightBulb(true);
+//			updateLightBulb(true);
 
 			pause();
 			_progressDlg = ProgressDialog.show(this, "Switching power", "Please wait...");
@@ -614,44 +708,69 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	}
 
 	private void pause() {
+		_switching = true;
+		Log.i(TAG, "main: update switch");
+		_watchdog.stop();
 		_service.stopIntervalScan();
 	}
 
 	private void resume() {
-		_service.startIntervalScan(BleDeviceFilter.all);
+		_ble.disconnectAndClose(false, new IStatusCallback() {
+			@Override
+			public void onSuccess() {
+				Log.i(TAG, "main: resume");
+				_switching = false;
+				_watchdog.start();
+				_service.startIntervalScan(BleDeviceFilter.all);
+			}
+
+			@Override
+			public void onError(int error) {
+				Log.i(TAG, "main: resume");
+				_switching = false;
+				_watchdog.start();
+				_service.startIntervalScan(BleDeviceFilter.all);
+			}
+		});
 	}
 
 	private void togglePWM() {
-		if (checkPermission()) {
-			boolean on = !_selectedBeacon.getSwitchState();
-			updateSwitchState(_selectedBeacon, on);
-			updateLightBulb(on);
-
-			pause();
-			_progressDlg = ProgressDialog.show(this, "Switching power", "Please wait...");
-			// toggle the device switch, without needing to know the current state. this function will
-			// check first if the device is connected (and connect if it is not), then it reads the
-			// current PWM state, and depending on the state, decides if it needs to switch it on or
-			// off. in the end it disconnects again (once the disconnect timeout expires)
-			_ble.togglePower(_selectedBeacon.getAddress(), new IStatusCallback() {
-				@Override
-				public void onSuccess() {
-					Log.i(TAG, "toggle success");
-					// power was toggled successfully, update the light bulb
-					_progressDlg.dismiss();
-					resume();
-				}
-
-				@Override
-				public void onError(int error) {
-					Log.e(TAG, "toggle failed: " + error);
-					_progressDlg.dismiss();
-					resume();
-				}
-			});
+		if (_selectedBeacon.getSwitchState()) {
+			powerOff();
 		} else {
-			onPermissionDenied();
+			powerOn();
 		}
+
+//		if (checkPermission()) {
+//			boolean on = !_selectedBeacon.getSwitchState();
+//			updateSwitchState(_selectedBeacon, on);
+//			updateLightBulb(on);
+//
+//			pause();
+//			_progressDlg = ProgressDialog.show(this, "Switching power", "Please wait...");
+//			// toggle the device switch, without needing to know the current state. this function will
+//			// check first if the device is connected (and connect if it is not), then it reads the
+//			// current PWM state, and depending on the state, decides if it needs to switch it on or
+//			// off. in the end it disconnects again (once the disconnect timeout expires)
+//			_ble.togglePower(_selectedBeacon.getAddress(), new IStatusCallback() {
+//				@Override
+//				public void onSuccess() {
+//					Log.i(TAG, "toggle success");
+//					// power was toggled successfully, update the light bulb
+//					_progressDlg.dismiss();
+//					resume();
+//				}
+//
+//				@Override
+//				public void onError(int error) {
+//					Log.e(TAG, "toggle failed: " + error);
+//					_progressDlg.dismiss();
+//					resume();
+//				}
+//			});
+//		} else {
+//			onPermissionDenied();
+//		}
 	}
 
 	private void updateLightBulb(final boolean on) {
@@ -682,18 +801,13 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		int id = item.getItemId();
 
 		switch(id) {
-			case R.id.action_logout: {
-				_userRepository.logout(new VoidCallback() {
-					@Override
-					public void onSuccess() {
-
-					}
-
-					@Override
-					public void onError(Throwable t) {
-
-					}
-				});
+			case R.id.action_settings: {
+				startActivity(new Intent(this, SettingsActivity.class));
+				break;
+			}
+			case R.id.action_refresh: {
+				refresh();
+				onStartWatch();
 				break;
 			}
 		}

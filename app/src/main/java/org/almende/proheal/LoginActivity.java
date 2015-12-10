@@ -210,8 +210,6 @@ public class LoginActivity extends Activity implements LoaderCallbacks<Cursor> {
 				@Override
 				public void onSuccess(AccessToken token, User currentUser) {
 					Log.i(TAG, token.getUserId() + ":" + currentUser.getId());
-					userRepo.getCurrentUserId();
-					Settings.getInstance(getApplicationContext()).setLoginState(true);
 					showProgress(false);
 					finish();
 				}
@@ -219,7 +217,6 @@ public class LoginActivity extends Activity implements LoaderCallbacks<Cursor> {
 				@Override
 				public void onError(Throwable t) {
 					Log.i(TAG, "error: ", t);
-					Settings.getInstance(getApplicationContext()).setLoginState(false);
 					showProgress(false);
 				}
 			});

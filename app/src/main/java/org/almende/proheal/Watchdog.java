@@ -17,6 +17,7 @@ import java.util.List;
 
 import nl.dobots.bluenet.ble.base.callbacks.IIntegerCallback;
 import nl.dobots.bluenet.ble.base.callbacks.IStatusCallback;
+import nl.dobots.bluenet.ble.extended.BleDeviceFilter;
 import nl.dobots.bluenet.ble.extended.BleExt;
 import nl.dobots.bluenet.service.BleScanService;
 
@@ -43,17 +44,54 @@ public class Watchdog {
 
 	private final BeaconRepository _beaconRepository;
 
+	private BleScanService _service;
+
 	private BleExt _ble;
 
 	private Handler _watchdogHandler;
 
 	private List<Beacon> _history = new ArrayList<>();
 
-	private boolean _stopped = true;
+//	private boolean _stopped = true;
+	private boolean _paused = false;
+
+	private void pauseService() {
+		if (_ble != null) {
+			Log.i(TAG, "watchdog: update switch state");
+			_service.stopIntervalScan();
+		}
+	}
+
+	private void resumeService() {
+		if (_ble != null) {
+			_ble.disconnectAndClose(false, new IStatusCallback() {
+				@Override
+				public void onSuccess() {
+					Log.i(TAG, "watchdog: resume");
+					_service.startIntervalScan(BleDeviceFilter.all);
+				}
+
+				@Override
+				public void onError(int error) {
+					Log.i(TAG, "watchdog: resume");
+					_service.startIntervalScan(BleDeviceFilter.all);
+				}
+			});
+		}
+	}
 
 	private Runnable updateSwitchState = new Runnable() {
 		@Override
 		public void run() {
+
+			if (_paused) {
+				return;
+			}
+
+			if (_ble == null) {
+				_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
+				return;
+			}
 
 			_beaconRepository.findAll(new ListCallback<Beacon>() {
 				@Override
@@ -67,40 +105,60 @@ public class Watchdog {
 						for (final Beacon thisBeacon : objects) {
 							if (lastBeacon.getId() == thisBeacon.getId()) {
 								if (lastBeacon.getSwitchState() != thisBeacon.getSwitchState()) {
+
+									if (_paused) {
+										return;
+									}
+
+									pauseService();
 									_ble.readPwm(thisBeacon.getAddress(), new IIntegerCallback() {
 										@Override
 										public void onSuccess(int result) {
 											if (thisBeacon.getSwitchState() && result == 0) {
 
+												if (_paused) {
+													return;
+												}
+
 												_ble.powerOn(thisBeacon.getAddress(), new IStatusCallback() {
 													@Override
 													public void onSuccess() {
-
+														resumeService();
 													}
 
 													@Override
 													public void onError(int error) {
 														thisBeacon.setSwitchState(false);
+														resumeService();
 													}
 												});
 											} else if (!thisBeacon.getSwitchState() && result != 0) {
+
+												if (_paused) {
+													return;
+												}
+
 												_ble.powerOff(thisBeacon.getAddress(), new IStatusCallback() {
 													@Override
 													public void onSuccess() {
-
+														resumeService();
 													}
 
 													@Override
 													public void onError(int error) {
 														thisBeacon.setSwitchState(true);
+														resumeService();
 													}
 												});
+											} else {
+												resumeService();
 											}
 										}
 
 										@Override
 										public void onError(int error) {
-
+											thisBeacon.setSwitchState(true);
+											resumeService();
 										}
 									});
 
@@ -110,36 +168,23 @@ public class Watchdog {
 					}
 
 					_history = objects;
-					if (!_stopped) {
+//					if (!_stopped) {
 						_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
-					}
+//					}
 				}
 
 				@Override
 				public void onError(Throwable t) {
 					Log.i(TAG, "error: ", t);
-					if (!_stopped) {
+//					if (!_stopped) {
 						_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
-					}
+//					}
 				}
 			});
 		}
 	};
 
-	public Watchdog(Context context, RestAdapter adapter) {
-		_ble = new BleExt();
-		_ble.init(context, new IStatusCallback() {
-			@Override
-			public void onSuccess() {
-
-			}
-
-			@Override
-			public void onError(int error) {
-
-			}
-		});
-
+	public Watchdog(RestAdapter adapter) {
 		_beaconRepository = adapter.createRepository(BeaconRepository.class);
 
 		HandlerThread ht = new HandlerThread("watchdog");
@@ -147,21 +192,43 @@ public class Watchdog {
 		_watchdogHandler = new Handler(ht.getLooper());
 	}
 
-	public void start() {
-		if (_stopped) {
-			Log.d(TAG, "watchdog started");
-			_stopped = false;
-			_watchdogHandler.removeCallbacksAndMessages(null);
-			_watchdogHandler.post(updateSwitchState);
-		}
+//	public void start() {
+//		if (_stopped) {
+//			Log.d(TAG, "watchdog started");
+//			_stopped = false;
+//			_watchdogHandler.removeCallbacksAndMessages(null);
+//			_watchdogHandler.post(updateSwitchState);
+//		}
+//	}
+
+//	public void stop() {
+//		if (!_stopped) {
+//			Log.d(TAG, "watchdog paused");
+//			_stopped = true;
+//			_watchdogHandler.removeCallbacksAndMessages(null);
+//		}
+//	}
+
+	public void setService(BleScanService service) {
+		_service = service;
+		_ble = service.getBleExt();
 	}
 
 	public void stop() {
-		if (!_stopped) {
-			Log.d(TAG, "watchdog paused");
-			_stopped = true;
-			_watchdogHandler.removeCallbacksAndMessages(null);
-		}
+		Log.d(TAG, "watchdog paused");
+		_paused = true;
+		_watchdogHandler.removeCallbacksAndMessages(null);
+	}
+
+	public void start() {
+		Log.d(TAG, "watchdog started");
+		_paused = false;
+		_watchdogHandler.removeCallbacksAndMessages(null);
+		_watchdogHandler.post(updateSwitchState);
+	}
+
+	public List<Beacon> getHistory() {
+		return _history;
 	}
 
 }
