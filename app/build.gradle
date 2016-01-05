@@ -22,6 +22,7 @@ android {
 dependencies {
     compile fileTree(dir: 'libs', include: ['*.jar'])
     compile project(':bluenet')
-    compile 'com.strongloop:loopback-sdk-android:1.5.+'
+//    compile 'com.strongloop:loopback-sdk-android:1.5.+'
     compile 'com.android.support:design:23.1.1'
+    compile project(':crownstone-loopback-sdk')
 }

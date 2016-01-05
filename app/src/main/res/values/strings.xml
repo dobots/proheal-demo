@@ -5,9 +5,9 @@
 	<string name="action_settings">Settings</string>
 	<string name="main_scan">Find Devices</string>
 	<string name="main_stop_scan">Stop</string>
-	<string name="main_welcome">This is an example of how Indoor Localization works together with the cloud API...</string>
+	<string name="main_welcome">This is an example of how Indoor Localization works together with the Crownstone Cloud API to provide you with localization based authentication. You can always switch a room locally, but remotely only if you own the room</string>
 	<string name="main_closest_device">Closest device: %s</string>
-	<string name="main_title">Welcome to the Almende ProHeal Demo</string>
+	<string name="main_title">Hi …</string>
 	<string name="title_activity_control">ControlActivity</string>
 	<string name="control_disconnect">Disconnect</string>
 	<string name="control_power_on">Power ON</string>

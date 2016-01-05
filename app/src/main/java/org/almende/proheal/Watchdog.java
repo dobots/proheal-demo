@@ -9,8 +9,6 @@ import com.strongloop.android.loopback.RestAdapter;
 import com.strongloop.android.loopback.callbacks.ListCallback;
 
 import org.almende.proheal.cfg.Config;
-import org.almende.proheal.loopback.Beacon;
-import org.almende.proheal.loopback.BeaconRepository;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,6 +18,8 @@ import nl.dobots.bluenet.ble.base.callbacks.IStatusCallback;
 import nl.dobots.bluenet.ble.extended.BleDeviceFilter;
 import nl.dobots.bluenet.ble.extended.BleExt;
 import nl.dobots.bluenet.service.BleScanService;
+import nl.dobots.loopback.loopback.Beacon;
+import nl.dobots.loopback.loopback.BeaconRepository;
 
 /**
  * Copyright (c) 2015 Dominik Egger <dominik@dobots.nl>. All rights reserved.
@@ -68,17 +68,21 @@ public class Watchdog {
 				@Override
 				public void onSuccess() {
 					Log.i(TAG, "watchdog: resume");
-					_service.startIntervalScan(BleDeviceFilter.all);
+					_service.startIntervalScan(BleDeviceFilter.crownstone);
+					_executing = false;
 				}
 
 				@Override
 				public void onError(int error) {
 					Log.i(TAG, "watchdog: resume");
-					_service.startIntervalScan(BleDeviceFilter.all);
+					_service.startIntervalScan(BleDeviceFilter.crownstone);
+					_executing = false;
 				}
 			});
 		}
 	}
+
+	private boolean _executing = false;
 
 	private Runnable updateSwitchState = new Runnable() {
 		@Override
@@ -93,6 +97,9 @@ public class Watchdog {
 				return;
 			}
 
+			_executing = true;
+
+			Log.i(TAG, "watchdog: checking beacons ...");
 			_beaconRepository.findAll(new ListCallback<Beacon>() {
 				@Override
 				public void onSuccess(List<Beacon> objects) {
@@ -101,25 +108,35 @@ public class Watchdog {
 //
 //					}
 
+					boolean hasChange = false;
+
 					for (Beacon lastBeacon : _history) {
 						for (final Beacon thisBeacon : objects) {
 							if (lastBeacon.getId() == thisBeacon.getId()) {
 								if (lastBeacon.getSwitchState() != thisBeacon.getSwitchState()) {
 
 									if (_paused) {
+										_executing = false;
 										return;
 									}
 
+									hasChange = true;
+
+									Log.i(TAG, "watchdog: update");
+
 									pauseService();
+									Log.i(TAG, "watchdog: readPwm");
 									_ble.readPwm(thisBeacon.getAddress(), new IIntegerCallback() {
 										@Override
 										public void onSuccess(int result) {
 											if (thisBeacon.getSwitchState() && result == 0) {
 
 												if (_paused) {
+													_executing = false;
 													return;
 												}
 
+												Log.i(TAG, "watchdog: pwmOn");
 												_ble.powerOn(thisBeacon.getAddress(), new IStatusCallback() {
 													@Override
 													public void onSuccess() {
@@ -135,9 +152,11 @@ public class Watchdog {
 											} else if (!thisBeacon.getSwitchState() && result != 0) {
 
 												if (_paused) {
+													_executing = false;
 													return;
 												}
 
+												Log.i(TAG, "watchdog: pwmOff");
 												_ble.powerOff(thisBeacon.getAddress(), new IStatusCallback() {
 													@Override
 													public void onSuccess() {
@@ -157,7 +176,7 @@ public class Watchdog {
 
 										@Override
 										public void onError(int error) {
-											thisBeacon.setSwitchState(true);
+											thisBeacon.setSwitchState(!thisBeacon.getSwitchState());
 											resumeService();
 										}
 									});
@@ -171,6 +190,12 @@ public class Watchdog {
 //					if (!_stopped) {
 						_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
 //					}
+
+					if (!hasChange) {
+						_executing = false;
+					}
+
+					Log.i(TAG, "watchdog: ... done");
 				}
 
 				@Override
@@ -179,6 +204,10 @@ public class Watchdog {
 //					if (!_stopped) {
 						_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
 //					}
+
+					Log.i(TAG, "watchdog: ... done");
+
+					_executing = false;
 				}
 			});
 		}
@@ -215,8 +244,15 @@ public class Watchdog {
 	}
 
 	public void stop() {
-		Log.d(TAG, "watchdog paused");
+		Log.d(TAG, "pausing watchdog ...");
 		_paused = true;
+
+		if (_executing) {
+			Log.d(TAG, "waiting ...");
+			while(_executing) {};
+		}
+
+		Log.d(TAG, "watchdog paused");
 		_watchdogHandler.removeCallbacksAndMessages(null);
 	}
 
@@ -229,6 +265,15 @@ public class Watchdog {
 
 	public List<Beacon> getHistory() {
 		return _history;
+	}
+
+	public void updateBeaconSwitchState(Beacon beacon, boolean switchState) {
+		for (Beacon oldBeacon : _history) {
+			if (oldBeacon.getAddress().equals(beacon.getAddress())) {
+				Log.w(TAG, String.format("updated history: %s", beacon.getAddress()));
+				oldBeacon.setSwitchState(switchState);
+			}
+		}
 	}
 
 }

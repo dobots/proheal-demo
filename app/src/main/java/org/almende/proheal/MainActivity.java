@@ -11,6 +11,7 @@ import android.content.ServiceConnection;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -30,12 +31,6 @@ import com.strongloop.android.loopback.callbacks.ObjectCallback;
 import com.strongloop.android.loopback.callbacks.VoidCallback;
 
 import org.almende.proheal.cfg.Config;
-import org.almende.proheal.cfg.Settings;
-import org.almende.proheal.loopback.Beacon;
-import org.almende.proheal.loopback.BeaconRepository;
-import org.almende.proheal.loopback.Location;
-import org.almende.proheal.loopback.LocationRepository;
-import org.almende.proheal.loopback.UserRepository;
 
 import java.util.List;
 
@@ -47,6 +42,13 @@ import nl.dobots.bluenet.ble.extended.structs.BleDeviceList;
 import nl.dobots.bluenet.service.BleScanService;
 import nl.dobots.bluenet.service.callbacks.EventListener;
 import nl.dobots.bluenet.service.callbacks.IntervalScanListener;
+import nl.dobots.loopback.CrownstoneRestAPI;
+import nl.dobots.loopback.loopback.Beacon;
+import nl.dobots.loopback.loopback.BeaconRepository;
+import nl.dobots.loopback.loopback.Location;
+import nl.dobots.loopback.loopback.LocationRepository;
+import nl.dobots.loopback.loopback.User;
+import nl.dobots.loopback.loopback.UserRepository;
 
 /**
  * This example activity shows the use of the bluenet library through the BleScanService. The
@@ -87,6 +89,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	private RelativeLayout _laySwitch;
 	private ProgressDialog _progressDlg;
 	private RelativeLayout _layDebug;
+	private TextView _txtTitle;
 
 	private boolean _bound = false;
 
@@ -116,6 +119,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	private Watchdog _watchdog;
 	private boolean _connectionError;
 	private boolean _stopped;
+
+	private BleDevice _lastClosestDevice;
 
 	private Handler _uiHandler = new Handler();
 	private Runnable _uiUpdate = new Runnable() {
@@ -149,7 +154,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 		initUI();
 
-		_restAdapter = new RestAdapter(getApplicationContext(), Config.REST_API_URL);
+//		_restAdapter = new RestAdapter(getApplicationContext(), Config.REST_API_URL);
+		_restAdapter = CrownstoneRestAPI.getRestAdapter(this, Config.REST_API_URL);
 
 		_watchdog = new Watchdog(_restAdapter);
 
@@ -185,6 +191,25 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			startActivity(new Intent(this, LoginActivity.class));
 			return;
 		}
+
+		_userRepository.findCurrentUser(new ObjectCallback<User>() {
+			@Override
+			public void onSuccess(User user) {
+				final String username = (String) user.get("username");
+				runOnUiThread(new Runnable() {
+					@Override
+					public void run() {
+						_txtTitle.setText(String.format("Hi %s", username));
+					}
+				});
+			}
+
+			@Override
+			public void onError(Throwable t) {
+
+			}
+		});
+
 
 		refresh();
 
@@ -331,13 +356,15 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	// scan interval or a scan pause
 	private boolean isScanning() {
 		if (_bound) {
-			return _ble.isScanning();
+			return _service.isScanning();
 		}
 		return false;
 	}
 
 	private void initUI() {
 		setContentView(R.layout.activity_main);
+
+		_txtTitle = (TextView) findViewById(R.id.title);
 
 		txtLocation = (TextView) findViewById(R.id.txtLocation);
 
@@ -467,16 +494,19 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		if (_bleDeviceList.size() > 0) {
 			final BleDevice closestDevice = _bleDeviceList.get(0);
 
-			if (closestDevice.getAverageRssi() > Config.PRESENCE_THRESHOLD) {
-				updateCurrentLocation(closestDevice);
-			} else {
-				_currentLocation = null;
-				txtLocation.post(new Runnable() {
-					@Override
-					public void run() {
-						txtLocation.setText("Unknown");
-					}
-				});
+			if (!closestDevice.equals(_lastClosestDevice)) {
+				if (closestDevice.getAverageRssi() > Config.PRESENCE_THRESHOLD) {
+					updateCurrentLocation(closestDevice);
+				} else {
+					_currentLocation = null;
+					txtLocation.post(new Runnable() {
+						@Override
+						public void run() {
+							txtLocation.setText("Unknown");
+						}
+					});
+				}
+				_lastClosestDevice = closestDevice;
 			}
 
 			if (Config.DEBUG) {
@@ -557,6 +587,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 	private void updateSelectedLocation(Location location) {
 		// find Beacon for this location
+		hideSwitch();
 		_locationRepository.findBeaconsForId(location.getId(), new ObjectCallback<Beacon>() {
 			@Override
 			public void onSuccess(Beacon object) {
@@ -574,7 +605,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		});
 	}
 
-	private void updateSwitchState(final Beacon beacon, final boolean newSwitchState) {
+	private void updateSwitchState(final Beacon beacon, final boolean newSwitchState, final VoidCallback callback) {
 		runOnUiThread(new Runnable() {
 			@Override
 			public void run() {
@@ -583,12 +614,14 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 					@Override
 					public void onSuccess() {
 						Log.i(TAG, "switch state updated successfully");
+						callback.onSuccess();
 					}
 
 					@Override
 					public void onError(Throwable t) {
 						Log.i(TAG, "error: ", t);
 						onConnectionError();
+						callback.onError(t);
 					}
 				});
 			}
@@ -632,6 +665,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 	private void onPermissionDenied() {
 
+		Log.w(TAG, "permission denied");
 		AlertDialog.Builder builder = new AlertDialog.Builder(this);
 		builder.setTitle("Permission denied")
 				.setIcon(android.R.drawable.ic_dialog_alert)
@@ -646,62 +680,92 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	}
 
 	private void powerOff() {
+		Log.i(TAG, "switching power off ...");
 		if (checkPermission()) {
-			updateSwitchState(_selectedBeacon, false);
-//			updateLightBulb(false);
 
 			pause();
-			_progressDlg = ProgressDialog.show(this, "Switching power", "Please wait...");
-			// switch the device off. this function will check first if the device is connected
-			// (and connect if it is not), then it switches the device off, and disconnects again
-			// afterwards (once the disconnect timeout expires)
-			_ble.powerOff(_selectedBeacon.getAddress(), new IStatusCallback() {
+			_progressDlg = ProgressDialog.show(MainActivity.this, "Switching power", "Please wait...");
+
+			updateSwitchState(_selectedBeacon, false, new VoidCallback() {
 				@Override
 				public void onSuccess() {
-					Log.i(TAG, "power off success");
-					// power was switch off successfully, update the light bulb
-					_progressDlg.dismiss();
-					resume();
+					// switch the device off. this function will check first if the device is connected
+					// (and connect if it is not), then it switches the device off, and disconnects again
+					// afterwards (once the disconnect timeout expires)
+					_ble.powerOff(_selectedBeacon.getAddress(), new IStatusCallback() {
+						@Override
+						public void onSuccess() {
+							Log.i(TAG, "power off success");
+							// power was switch off successfully, update the light bulb
+							_progressDlg.dismiss();
+							_watchdog.updateBeaconSwitchState(_selectedBeacon, false);
+							resume();
+						}
+
+						@Override
+						public void onError(int error) {
+							Log.i(TAG, "power off failed: " + error);
+							_progressDlg.dismiss();
+							resume();
+						}
+					});
 				}
 
 				@Override
-				public void onError(int error) {
-					Log.i(TAG, "power off failed: " + error);
+				public void onError(Throwable t) {
+					Log.i(TAG, "failed to update switch state");
 					_progressDlg.dismiss();
 					resume();
 				}
 			});
+//			updateLightBulb(false);
+
 		} else {
 			onPermissionDenied();
 		}
 	}
 
 	private void powerOn() {
+		Log.i(TAG, "switching power on ...");
 		if (checkPermission()) {
-			updateSwitchState(_selectedBeacon, true);
-//			updateLightBulb(true);
 
 			pause();
-			_progressDlg = ProgressDialog.show(this, "Switching power", "Please wait...");
-			// switch the device on. this function will check first if the device is connected
-			// (and connect if it is not), then it switches the device on, and disconnects again
-			// afterwards (once the disconnect timeout expires)
-			_ble.powerOn(_selectedBeacon.getAddress(), new IStatusCallback() {
+			_progressDlg = ProgressDialog.show(MainActivity.this, "Switching power", "Please wait...");
+
+			updateSwitchState(_selectedBeacon, true, new VoidCallback() {
 				@Override
 				public void onSuccess() {
-					Log.i(TAG, "power on success");
-					// power was switch on successfully, update the light bulb
-					_progressDlg.dismiss();
-					resume();
+					// switch the device on. this function will check first if the device is connected
+					// (and connect if it is not), then it switches the device on, and disconnects again
+					// afterwards (once the disconnect timeout expires)
+					_ble.powerOn(_selectedBeacon.getAddress(), new IStatusCallback() {
+						@Override
+						public void onSuccess() {
+							Log.i(TAG, "power on success");
+							// power was switch on successfully, update the light bulb
+							_progressDlg.dismiss();
+							_watchdog.updateBeaconSwitchState(_selectedBeacon, true);
+							resume();
+						}
+
+						@Override
+						public void onError(int error) {
+							Log.i(TAG, "power on failed: " + error);
+							_progressDlg.dismiss();
+							resume();
+						}
+					});
 				}
 
 				@Override
-				public void onError(int error) {
-					Log.i(TAG, "power on failed: " + error);
+				public void onError(Throwable t) {
+					Log.i(TAG, "failed to update switch state");
 					_progressDlg.dismiss();
 					resume();
 				}
 			});
+//			updateLightBulb(true);
+
 		} else {
 			onPermissionDenied();
 		}
@@ -709,27 +773,29 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 	private void pause() {
 		_switching = true;
-		Log.i(TAG, "main: update switch");
+		Log.i(TAG, "main: pausing to update ...");
 		_watchdog.stop();
 		_service.stopIntervalScan();
+		SystemClock.sleep(500);
+		Log.i(TAG, "main: ... ok");
 	}
 
 	private void resume() {
 		_ble.disconnectAndClose(false, new IStatusCallback() {
 			@Override
 			public void onSuccess() {
-				Log.i(TAG, "main: resume");
+				Log.i(TAG, "main: resume with scan");
 				_switching = false;
 				_watchdog.start();
-				_service.startIntervalScan(BleDeviceFilter.all);
+				_service.startIntervalScan(BleDeviceFilter.crownstone);
 			}
 
 			@Override
 			public void onError(int error) {
-				Log.i(TAG, "main: resume");
+				Log.i(TAG, "main error: resume with scan");
 				_switching = false;
 				_watchdog.start();
-				_service.startIntervalScan(BleDeviceFilter.all);
+				_service.startIntervalScan(BleDeviceFilter.crownstone);
 			}
 		});
 	}

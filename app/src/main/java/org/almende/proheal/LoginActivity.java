@@ -37,11 +37,13 @@ import com.strongloop.android.loopback.callbacks.ListCallback;
 
 import org.almende.proheal.cfg.Config;
 import org.almende.proheal.cfg.Settings;
-import org.almende.proheal.loopback.User;
-import org.almende.proheal.loopback.UserRepository;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import nl.dobots.loopback.CrownstoneRestAPI;
+import nl.dobots.loopback.loopback.User;
+import nl.dobots.loopback.loopback.UserRepository;
 
 import static android.Manifest.permission.READ_CONTACTS;
 
@@ -108,7 +110,8 @@ public class LoginActivity extends Activity implements LoaderCallbacks<Cursor> {
 		mLoginFormView = findViewById(R.id.login_form);
 		mProgressView = findViewById(R.id.login_progress);
 
-		_restAdapter = new RestAdapter(getApplicationContext(), Config.REST_API_URL);
+//		_restAdapter = new RestAdapter(getApplicationContext(), Config.REST_API_URL);
+		_restAdapter = CrownstoneRestAPI.getRestAdapter(this, Config.REST_API_URL);
 	}
 
 	private void populateAutoComplete() {

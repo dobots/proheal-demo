@@ -14,7 +14,8 @@ import com.strongloop.android.loopback.RestAdapter;
 
 import org.almende.proheal.cfg.Config;
 import org.almende.proheal.cfg.Settings;
-import org.almende.proheal.loopback.UserRepository;
+
+import nl.dobots.loopback.loopback.UserRepository;
 
 public class SettingsActivity extends Activity {
 
