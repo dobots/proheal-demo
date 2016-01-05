@@ -122,6 +122,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 	private BleDevice _lastClosestDevice;
 
+	private Inventory _inventory;
+
 	private Handler _uiHandler = new Handler();
 	private Runnable _uiUpdate = new Runnable() {
 		@Override
@@ -160,6 +162,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		_watchdog = new Watchdog(_restAdapter);
 
 		_uiHandler.postDelayed(_uiUpdate, Config.GUI_UPDATE_INTERVAL);
+
+		_inventory = Inventory.getInstance();
 
 //		_ble = new BleExt();
 //		_ble.init(this, new IStatusCallback() {
@@ -698,7 +702,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 							Log.i(TAG, "power off success");
 							// power was switch off successfully, update the light bulb
 							_progressDlg.dismiss();
-							_watchdog.updateBeaconSwitchState(_selectedBeacon, false);
+							_inventory.updateBeaconSwitchState(_selectedBeacon, false);
+							updateLightBulb(false);
 							resume();
 						}
 
@@ -744,7 +749,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 							Log.i(TAG, "power on success");
 							// power was switch on successfully, update the light bulb
 							_progressDlg.dismiss();
-							_watchdog.updateBeaconSwitchState(_selectedBeacon, true);
+							_inventory.updateBeaconSwitchState(_selectedBeacon, true);
+							updateLightBulb(true);
 							resume();
 						}
 

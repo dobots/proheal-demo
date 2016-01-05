@@ -1,6 +1,5 @@
 package org.almende.proheal;
 
-import android.content.Context;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
@@ -10,7 +9,7 @@ import com.strongloop.android.loopback.callbacks.ListCallback;
 
 import org.almende.proheal.cfg.Config;
 
-import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 import nl.dobots.bluenet.ble.base.callbacks.IIntegerCallback;
@@ -44,45 +43,31 @@ public class Watchdog {
 
 	private final BeaconRepository _beaconRepository;
 
+	private final Inventory _inventory;
+
 	private BleScanService _service;
 
 	private BleExt _ble;
 
 	private Handler _watchdogHandler;
 
-	private List<Beacon> _history = new ArrayList<>();
-
 //	private boolean _stopped = true;
 	private boolean _paused = false;
 
-	private void pauseService() {
-		if (_ble != null) {
-			Log.i(TAG, "watchdog: update switch state");
-			_service.stopIntervalScan();
-		}
-	}
-
-	private void resumeService() {
-		if (_ble != null) {
-			_ble.disconnectAndClose(false, new IStatusCallback() {
-				@Override
-				public void onSuccess() {
-					Log.i(TAG, "watchdog: resume");
-					_service.startIntervalScan(BleDeviceFilter.crownstone);
-					_executing = false;
-				}
-
-				@Override
-				public void onError(int error) {
-					Log.i(TAG, "watchdog: resume");
-					_service.startIntervalScan(BleDeviceFilter.crownstone);
-					_executing = false;
-				}
-			});
-		}
-	}
+	private boolean _scanPaused = false;
 
 	private boolean _executing = false;
+//	private boolean hasChange = false;
+
+	public Watchdog(RestAdapter adapter) {
+		_beaconRepository = adapter.createRepository(BeaconRepository.class);
+
+		HandlerThread ht = new HandlerThread("watchdog");
+		ht.start();
+		_watchdogHandler = new Handler(ht.getLooper());
+
+		_inventory = Inventory.getInstance();
+	}
 
 	private Runnable updateSwitchState = new Runnable() {
 		@Override
@@ -104,98 +89,15 @@ public class Watchdog {
 				@Override
 				public void onSuccess(List<Beacon> objects) {
 
-//					while (_ble.isScanning()) {
-//
-//					}
-
-					boolean hasChange = false;
-
-					for (Beacon lastBeacon : _history) {
-						for (final Beacon thisBeacon : objects) {
-							if (lastBeacon.getId() == thisBeacon.getId()) {
-								if (lastBeacon.getSwitchState() != thisBeacon.getSwitchState()) {
-
-									if (_paused) {
-										_executing = false;
-										return;
-									}
-
-									hasChange = true;
-
-									Log.i(TAG, "watchdog: update");
-
-									pauseService();
-									Log.i(TAG, "watchdog: readPwm");
-									_ble.readPwm(thisBeacon.getAddress(), new IIntegerCallback() {
-										@Override
-										public void onSuccess(int result) {
-											if (thisBeacon.getSwitchState() && result == 0) {
-
-												if (_paused) {
-													_executing = false;
-													return;
-												}
-
-												Log.i(TAG, "watchdog: pwmOn");
-												_ble.powerOn(thisBeacon.getAddress(), new IStatusCallback() {
-													@Override
-													public void onSuccess() {
-														resumeService();
-													}
-
-													@Override
-													public void onError(int error) {
-														thisBeacon.setSwitchState(false);
-														resumeService();
-													}
-												});
-											} else if (!thisBeacon.getSwitchState() && result != 0) {
-
-												if (_paused) {
-													_executing = false;
-													return;
-												}
-
-												Log.i(TAG, "watchdog: pwmOff");
-												_ble.powerOff(thisBeacon.getAddress(), new IStatusCallback() {
-													@Override
-													public void onSuccess() {
-														resumeService();
-													}
-
-													@Override
-													public void onError(int error) {
-														thisBeacon.setSwitchState(true);
-														resumeService();
-													}
-												});
-											} else {
-												resumeService();
-											}
-										}
-
-										@Override
-										public void onError(int error) {
-											thisBeacon.setSwitchState(!thisBeacon.getSwitchState());
-											resumeService();
-										}
-									});
-
-								}
-							}
-						}
-					}
-
-					_history = objects;
-//					if (!_stopped) {
-						_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
-//					}
-
-					if (!hasChange) {
+					Iterator<Beacon> it = objects.iterator();
+					if (it.hasNext()) {
+						updateNextBeacon(it);
+					} else {
+						Log.i(TAG, "nothing to do!");
 						_executing = false;
+						_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
 					}
 
-					Log.i(TAG, "watchdog: ... done");
 				}
 
 				@Override
@@ -213,30 +115,131 @@ public class Watchdog {
 		}
 	};
 
-	public Watchdog(RestAdapter adapter) {
-		_beaconRepository = adapter.createRepository(BeaconRepository.class);
-
-		HandlerThread ht = new HandlerThread("watchdog");
-		ht.start();
-		_watchdogHandler = new Handler(ht.getLooper());
+	private void pauseScan() {
+		if (_ble != null) {
+			Log.i(TAG, "watchdog: pause scan to update switch state");
+			_service.stopIntervalScan();
+			_scanPaused = true;
+		}
 	}
 
-//	public void start() {
-//		if (_stopped) {
-//			Log.d(TAG, "watchdog started");
-//			_stopped = false;
-//			_watchdogHandler.removeCallbacksAndMessages(null);
-//			_watchdogHandler.post(updateSwitchState);
-//		}
-//	}
+	private void resumeScan() {
+		if (_ble != null) {
+			Log.i(TAG, "watchdog: resume scan");
+			_service.startIntervalScan(BleDeviceFilter.crownstone);
+			_scanPaused = false;
 
-//	public void stop() {
-//		if (!_stopped) {
-//			Log.d(TAG, "watchdog paused");
-//			_stopped = true;
-//			_watchdogHandler.removeCallbacksAndMessages(null);
-//		}
-//	}
+		}
+	}
+
+	private void disconnectAndUpdateNextBeacon(final Iterator<Beacon> iterator) {
+		_ble.disconnectAndClose(false, new IStatusCallback() {
+			@Override
+			public void onSuccess() {
+				updateNextBeacon(iterator);
+			}
+
+			@Override
+			public void onError(int error) {
+				updateNextBeacon(iterator);
+			}
+		});
+	}
+
+	private void updateNextBeacon(final Iterator<Beacon> iterator) {
+		if (iterator.hasNext()) {
+			final Beacon thisBeacon = iterator.next();
+			Beacon lastBeacon = _inventory.findBeacon(thisBeacon.getId());
+
+			if (lastBeacon == null) {
+
+				_inventory.addBeacon(thisBeacon);
+				updateNextBeacon(iterator);
+
+			} else if (lastBeacon.getSwitchState() != thisBeacon.getSwitchState()) {
+
+				if (_paused) {
+					finishUpdate(false);
+					return;
+				}
+
+				Log.i(TAG, "watchdog: update");
+
+				pauseScan();
+
+				Log.i(TAG, "watchdog: readPwm");
+				_ble.readPwm(thisBeacon.getAddress(), new IIntegerCallback() {
+					@Override
+					public void onSuccess(int result) {
+						if (thisBeacon.getSwitchState() && result == 0) {
+
+							if (_paused) {
+								finishUpdate(false);
+								return;
+							}
+
+							Log.i(TAG, "watchdog: pwmOn");
+							_ble.powerOn(thisBeacon.getAddress(), new IStatusCallback() {
+								@Override
+								public void onSuccess() {
+									_inventory.updateBeaconSwitchState(thisBeacon, true);
+									disconnectAndUpdateNextBeacon(iterator);
+								}
+
+								@Override
+								public void onError(int error) {
+//									thisBeacon.setSwitchState(false);
+									disconnectAndUpdateNextBeacon(iterator);
+								}
+							});
+						} else if (!thisBeacon.getSwitchState() && result != 0) {
+
+							if (_paused) {
+								finishUpdate(false);
+								return;
+							}
+
+							Log.i(TAG, "watchdog: pwmOff");
+							_ble.powerOff(thisBeacon.getAddress(), new IStatusCallback() {
+								@Override
+								public void onSuccess() {
+									_inventory.updateBeaconSwitchState(thisBeacon, false);
+									disconnectAndUpdateNextBeacon(iterator);
+								}
+
+								@Override
+								public void onError(int error) {
+//									thisBeacon.setSwitchState(true);
+									disconnectAndUpdateNextBeacon(iterator);
+								}
+							});
+						} else {
+							updateNextBeacon(iterator);
+						}
+					}
+
+					@Override
+					public void onError(int error) {
+//						thisBeacon.setSwitchState(!thisBeacon.getSwitchState());
+						disconnectAndUpdateNextBeacon(iterator);
+					}
+				});
+			} else {
+				updateNextBeacon(iterator);
+			}
+		} else {
+			finishUpdate(true);
+		}
+	}
+
+	private void finishUpdate(boolean done) {
+		_executing = false;
+		if (done && _scanPaused) {
+			resumeScan();
+		}
+		Log.i(TAG, "... done");
+		_watchdogHandler.postDelayed(updateSwitchState, Config.WATCHDOG_INTERVAL);
+	}
 
 	public void setService(BleScanService service) {
 		_service = service;
@@ -261,19 +264,6 @@ public class Watchdog {
 		_paused = false;
 		_watchdogHandler.removeCallbacksAndMessages(null);
 		_watchdogHandler.post(updateSwitchState);
-	}
-
-	public List<Beacon> getHistory() {
-		return _history;
-	}
-
-	public void updateBeaconSwitchState(Beacon beacon, boolean switchState) {
-		for (Beacon oldBeacon : _history) {
-			if (oldBeacon.getAddress().equals(beacon.getAddress())) {
-				Log.w(TAG, String.format("updated history: %s", beacon.getAddress()));
-				oldBeacon.setSwitchState(switchState);
-			}
-		}
 	}
 
 }
