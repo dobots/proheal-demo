@@ -165,6 +165,8 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 		_inventory = Inventory.getInstance();
 
+		BleDevice.setExpirationTime(2000);
+
 //		_ble = new BleExt();
 //		_ble.init(this, new IStatusCallback() {
 //			@Override
@@ -200,12 +202,14 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			@Override
 			public void onSuccess(User user) {
 				final String username = (String) user.get("username");
-				runOnUiThread(new Runnable() {
-					@Override
-					public void run() {
-						_txtTitle.setText(String.format("Hi %s", username));
-					}
-				});
+				if (username != null) {
+					runOnUiThread(new Runnable() {
+						@Override
+						public void run() {
+							_txtTitle.setText(String.format("Hi %s", username));
+						}
+					});
+				}
 			}
 
 			@Override
@@ -498,19 +502,20 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		if (_bleDeviceList.size() > 0) {
 			final BleDevice closestDevice = _bleDeviceList.get(0);
 
-			if (!closestDevice.equals(_lastClosestDevice)) {
-				if (closestDevice.getAverageRssi() > Config.PRESENCE_THRESHOLD) {
+			if (closestDevice.getAverageRssi() > Config.PRESENCE_THRESHOLD) {
+				if (!closestDevice.equals(_lastClosestDevice)) {
 					updateCurrentLocation(closestDevice);
-				} else {
-					_currentLocation = null;
-					txtLocation.post(new Runnable() {
-						@Override
-						public void run() {
-							txtLocation.setText("Unknown");
-						}
-					});
+					_lastClosestDevice = closestDevice;
 				}
-				_lastClosestDevice = closestDevice;
+			} else {
+				_lastClosestDevice = null;
+				_currentLocation = null;
+				txtLocation.post(new Runnable() {
+					@Override
+					public void run() {
+						txtLocation.setText("Unknown");
+					}
+				});
 			}
 
 			if (Config.DEBUG) {
@@ -585,6 +590,14 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			case BLUETOOTH_TURNED_OFF: {
 				onBleDisabled();
 				break;
+			}
+			case BLUETOOTH_START_SCAN_ERROR: {
+				runOnUiThread(new Runnable() {
+					@Override
+					public void run() {
+						_btnScan.setText(getString(R.string.main_scan));
+					}
+				});
 			}
 		}
 	}
