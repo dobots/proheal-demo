@@ -105,7 +105,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	private List<Beacon> _trackedBeacons;
 	private BeaconRepository _beaconRepository;
 
-	private Location _currentLocation;
+	private Location _currentLocation = new Location();
 	private LocationRepository _locationRepository;
 	private List<Location> _locations;
 
@@ -123,6 +123,9 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 	private BleDevice _lastClosestDevice;
 
 	private Inventory _inventory;
+
+	private boolean _switching = false;
+	private User _currentUser;
 
 	private Handler _uiHandler = new Handler();
 	private Runnable _uiUpdate = new Runnable() {
@@ -147,8 +150,6 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			}
 		}
 	};
-
-	private boolean _switching = false;
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
@@ -201,6 +202,7 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 		_userRepository.findCurrentUser(new ObjectCallback<User>() {
 			@Override
 			public void onSuccess(User user) {
+				_currentUser = user;
 				final String username = (String) user.get("username");
 				if (username != null) {
 					runOnUiThread(new Runnable() {
@@ -501,21 +503,15 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 
 		if (_bleDeviceList.size() > 0) {
 			final BleDevice closestDevice = _bleDeviceList.get(0);
+			int averageRssi = closestDevice.getAverageRssi();
 
-			if (closestDevice.getAverageRssi() > Config.PRESENCE_THRESHOLD) {
+			if (averageRssi != 0 && averageRssi > Config.PRESENCE_THRESHOLD) {
 				if (!closestDevice.equals(_lastClosestDevice)) {
 					updateCurrentLocation(closestDevice);
 					_lastClosestDevice = closestDevice;
 				}
 			} else {
-				_lastClosestDevice = null;
-				_currentLocation = null;
-				txtLocation.post(new Runnable() {
-					@Override
-					public void run() {
-						txtLocation.setText("Unknown");
-					}
-				});
+				onLocationUnknown();
 			}
 
 			if (Config.DEBUG) {
@@ -533,6 +529,35 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 					}
 				});
 			}
+		} else {
+			onLocationUnknown();
+		}
+	}
+
+	private void onLocationUnknown() {
+		if (_currentLocation != null) {
+			_lastClosestDevice = null;
+			_currentLocation = null;
+
+			_currentUser.setLocationId(null);
+			_currentUser.save(new VoidCallback() {
+				@Override
+				public void onSuccess() {
+					Log.i(TAG, "current location updated");
+				}
+
+				@Override
+				public void onError(Throwable t) {
+					Log.e(TAG, "failed to update current location!");
+				}
+			});
+
+			txtLocation.post(new Runnable() {
+				@Override
+				public void run() {
+					txtLocation.setText("Unknown");
+				}
+			});
 		}
 	}
 
@@ -541,6 +566,20 @@ public class MainActivity extends Activity implements IntervalScanListener, Even
 			@Override
 			public void onSuccess(Location object) {
 				_currentLocation = object;
+
+				_currentUser.setLocationId(_currentLocation.getId());
+				_currentUser.save(new VoidCallback() {
+					@Override
+					public void onSuccess() {
+						Log.i(TAG, "current location updated");
+					}
+
+					@Override
+					public void onError(Throwable t) {
+						Log.e(TAG, "failed to update current location!");
+					}
+				});
+
 				txtLocation.post(new Runnable() {
 					@Override
 					public void run() {
